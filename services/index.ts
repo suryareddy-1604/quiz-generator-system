@@ -10,9 +10,21 @@ import { ChatOpenAI } from "@langchain/openai";
 import { WebPDFLoader } from "@langchain/community/document_loaders/web/pdf";
 import { Runnable, RunnableConfig } from "@langchain/core/runnables";
 
-// Add OpenRouter integration
-const OPENROUTER_API_BASE = process.env.OPENROUTER_API_BASE;
+// Gemini / Google Generative API integration
+const GEMINI_API_BASE = process.env.GEMINI_API_BASE;
 const DEFAULT_MODEL_FALLBACK = "qwen/qwq-32b:free";
+
+const SUPPORTED_MIME_TYPES = [
+  'application/pdf',
+  'application/x-pdf',
+  'application/acrobat'
+];
+
+function validatePDFFile(file: File) {
+  if (!SUPPORTED_MIME_TYPES.includes(file.type)) {
+    throw new Error('Invalid file type. Only PDF files are supported.');
+  }
+}
 
 interface GenerateQuestionsParams {
   questionHeader: string;
@@ -61,12 +73,12 @@ const AgentState = Annotation.Root({
 /**
  * Create a custom LLM client that uses OpenRouter instead of OpenAI directly
  */
-class OpenRouterLLM extends ChatOpenAI {
+class GeminiLLM extends ChatOpenAI {
   private siteUrl: string;
   private siteName: string;
 
   constructor(options: {
-    openRouterApiKey: string;
+    geminiApiKey: string;
     modelName?: string;
     temperature?: number;
     siteUrl?: string;
@@ -74,10 +86,14 @@ class OpenRouterLLM extends ChatOpenAI {
   }) {
     super({
       modelName: options.modelName || DEFAULT_MODEL_FALLBACK,
-      openAIApiKey: options.openRouterApiKey,
+      apiKey: options.geminiApiKey,
       temperature: options.temperature ?? 0.2,
       configuration: {
-        baseURL: OPENROUTER_API_BASE,
+        baseURL: GEMINI_API_BASE || "https://generative.googleapis.com/v1",
+        defaultHeaders: {
+          "HTTP-Referer": options.siteUrl || "http://localhost:3000",
+          "X-Title": options.siteName || "QuestGen",
+        },
       },
     });
 
@@ -87,14 +103,13 @@ class OpenRouterLLM extends ChatOpenAI {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async _generate(messages: any[], options?: any, runManager?: any) {
-    // Add custom headers for OpenRouter
+    // Add custom headers for Gemini / Google Generative API
     const customHeaders = {
       "HTTP-Referer":
-        process.env.NEXT_PUBLIC_OPENROUTER_SITE_URL || this.siteUrl,
+        process.env.NEXT_PUBLIC_GEMINI_SITE_URL || this.siteUrl,
       "X-Title": this.siteName,
     };
 
-    // Merge headers with any existing ones
     if (!options) options = {};
     if (!options.headers) options.headers = {};
     options.headers = { ...options.headers, ...customHeaders };
@@ -152,9 +167,9 @@ export async function createMultiAgentWorkflow(
     modelName?: string;
   }
 ) {
-  // Create LLM using OpenRouter
-  const llm = new OpenRouterLLM({
-    openRouterApiKey: apiKey,
+  // Create LLM using Gemini-compatible wrapper
+  const llm = new GeminiLLM({
+    geminiApiKey: apiKey,
     modelName: options?.modelName || DEFAULT_MODEL_FALLBACK,
     temperature: 0.6,
     siteUrl: options?.siteUrl,

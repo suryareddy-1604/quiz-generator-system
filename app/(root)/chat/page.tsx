@@ -14,12 +14,16 @@ import ReactMarkdown from "react-markdown";
 import React, { useState, useEffect, useRef } from "react";
 import { ChevronDown } from "lucide-react";
 
+type LoadingState = 'idle' | 'uploading' | 'processing' | 'generating';
+
 function Page() {
   const [files, setFiles] = useState<File[]>([]);
   const [questionHeader, setQuestionHeader] = useState("");
   const [questionDescription, setQuestionDescription] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [modelName, setModelName] = useState("qwen/qwq-32b:free");
+  const [loadingState, setLoadingState] = useState<LoadingState>('idle');
+  const [progress, setProgress] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
   const [isFormSubmitted, setIsFormSubmitted] = useState(false);

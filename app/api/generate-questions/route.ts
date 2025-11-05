@@ -4,6 +4,15 @@ import { generateQuestions } from "@/services/index";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
+// Removed OpenRouter/OpenAI client - using passed API keys or GEMINI env variable
+class APIError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = 'APIError';
+  }
+}
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +25,9 @@ export async function POST(req: NextRequest) {
     const convex = new ConvexHttpClient(
       process.env.NEXT_PUBLIC_CONVEX_URL || ""
     );
+    // No OpenRouter client instantiated here. The generation service will
+    // receive the API key (from the request or from environment) and use
+    // the appropriate client implementation (Gemini) inside the service layer.
 
     // Verify Convex connection
     console.log("Convex URL:", process.env.NEXT_PUBLIC_CONVEX_URL);
@@ -314,102 +326,47 @@ export async function GET(req: NextRequest) {
           for await (const event of result.stream) {
             console.log("Received event:", event);
 
-            // Check if this is an agent type we want to process
+            // Determine agent type and only process formatter events
             const agentType = Object.keys(event)[0];
-
-            // Only process events from Formatter agent
             if (agentType !== "Formatter") {
               console.log(`Skipping event from agent: ${agentType}`);
-              continue; // Skip this event
+              continue;
             }
 
             let content = "";
-
             try {
-              // Process events from specified agents
               if (
                 event[agentType] &&
                 event[agentType].messages &&
                 event[agentType].messages[0] &&
                 event[agentType].messages[0].content
               ) {
-                // Extract content from the standard messages structure
                 content = event[agentType].messages[0].content;
-
-                // If there's additional data like analysisResult, prefer it
                 if (event[agentType].analysisResult) {
                   content = event[agentType].analysisResult;
                 }
               } else {
-                // Fallback to stringifying the entire event
                 content = JSON.stringify(event);
               }
-
-              console.log(`Processing content from ${agentType}:`, content);
-              // eslint-disable-next-line @typescript-eslint/no-unused-vars
             } catch (err) {
-              // If any error in parsing, use the event as is
               content = JSON.stringify(event);
             }
 
             // Clean up the content - remove code block formatting
-            let cleanContent = content;
-
-            // Remove markdown code block formatting if present
-            cleanContent = cleanContent
+            const cleanContent = String(content)
               .replace(/```(json)?\n/g, "")
               .replace(/```$/g, "");
 
-            // Check if content is JSON (starts with { or [)
-            const isJsonContent =
-              cleanContent.trim().startsWith("{") ||
-              cleanContent.trim().startsWith("[");
+            const formattedChunk = `data: ${JSON.stringify({
+              type: "markdown",
+              content: cleanContent,
+              isMarkdown: true,
+            })}\n\n`;
 
-            let messageToSend;
+            console.log(`Sending markdown chunk (length: ${formattedChunk.length})`);
 
-            if (isJsonContent) {
-              // If it's JSON content, send busy server message
-              messageToSend = "server is busy currently try again later";
-              console.log("JSON content detected, sending busy server message");
-
-              // Format as proper SSE with a consistent delimiter
-              const formattedChunk = `data: ${JSON.stringify({
-                type: "error",
-                content: messageToSend,
-              })}\n\n`;
-
-              // Write the chunk to the stream
-              const writeSuccess = await safelyWriteToStream(formattedChunk);
-              if (!writeSuccess) break;
-
-              // Close the stream after sending error
-              await safelyWriteToStream("event: complete\ndata: done\n\n");
-
-              // Clean up Convex files before closing writer
-              await cleanupConvexFiles();
-
-              // // Safely close the writer
-              // await safelyCloseWriter();
-
-              // Exit the processing loop
-              return;
-            } else {
-              // For markdown content, prepare it for sending
-              messageToSend = cleanContent;
-              const formattedChunk = `data: ${JSON.stringify({
-                type: "markdown",
-                content: messageToSend,
-                isMarkdown: true,
-              })}\n\n`;
-
-              console.log(
-                `Sending markdown chunk (length: ${formattedChunk.length})`
-              );
-
-              // Write the chunk to the stream
-              const writeSuccess = await safelyWriteToStream(formattedChunk);
-              if (!writeSuccess) break;
-            }
+            const writeSuccess = await safelyWriteToStream(formattedChunk);
+            if (!writeSuccess) break;
           }
 
           // Signal completion
